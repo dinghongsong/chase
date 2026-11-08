@@ -573,7 +573,7 @@ class Contract:
         return _algebra("merging", self, other, name)
 
     def divide(self, other: "Contract", name: str | None = None, discharge: bool = False,
-               backend: str = "auto", **options) -> "Contract":
+               backend: str = "auto", eliminate: bool = False, **options) -> "Contract":
         """Largest C such that other || C refines self:
         (A1 & G2, (G1 & A2) | !(A1 & G2)), with the contracts saturated
         (Incer et al., MEMOCODE 2018).
@@ -587,8 +587,27 @@ class Contract:
         quotient. Then the terms implied by the others are dropped as in
         ``remove_redundant``. Each test is one implication check (nuXmv or
         NuSMV; ``backend`` and ``options`` as for the checks).
+
+        With ``eliminate=True``, the variables that are not on the interface
+        of the quotient (the outputs of both, and the inputs of both) are
+        eliminated (Incer et al., Pacti, ACM TCPS 9(1), 2025, quotient
+        algorithm), by the GR(1) variable elimination of ``chase_cps.cave``
+        (Narter, Zhao, Incer, arXiv 2610.37534). The assumptions of self are
+        relaxed, with the guarantees of other as context when the assumptions
+        of self imply those of other; the guarantees of self are refined with
+        the guarantees of other as context, the assumptions of other are
+        added, and the whole is refined with the assumptions of self as
+        context. The guarantees are then simplified where the assumptions
+        of the result hold (``chase_cps.cave.simplify``), which does not change
+        the contract. All the terms must be GR(1), over Booleans, reals, and
+        integer ranges. The result refines the quotient, so other composed
+        with any refinement of it refines self.
         """
         name = name or f"{self.name}_div_{other.name}"
+        if eliminate:
+            if discharge:
+                raise ValueError("divide: discharge and eliminate are exclusive")
+            return _divide_eliminating(self, other, name)
         if discharge:
             return _divide_terms(self, other, name, backend, **options)
         return _algebra("quotient", self, other, name)
@@ -699,6 +718,52 @@ def _compose_eliminating(c1: Contract, c2: Contract, name: str) -> Contract:
         if g not in guarantees and not ltl.variables(g) & internal:
             guarantees.append(g)
 
+    keep = {v: t for v, t in types.items() if v not in internal}
+    return Contract(name, {v: t for v, t in keep.items() if v not in outputs},
+                    {v: t for v, t in keep.items() if v in outputs}, assumptions, guarantees)
+
+
+def _divide_eliminating(c1: Contract, c2: Contract, name: str) -> Contract:
+    """Quotient c1 / c2 eliminating the variables off its interface (see
+    Contract.divide)."""
+    from . import cave
+    from .checks import _merge_vars
+    from .gr1 import gr1_kind
+    c1, c2 = _ranges_joined(c1, c2)
+    both = (set(c1.outputs) - set(c2.outputs)) & set(c2.inputs)
+    if both:
+        raise ValueError(f"cannot divide {c1.name} by {c2.name}: {sorted(both)} are outputs "
+                         f"of {c1.name} and inputs of {c2.name}")
+    types = _merge_vars(c1, c2)
+    outputs = _outputs("quotient", c1, c2)
+    internal = (set(c1.outputs) & set(c2.outputs)) | (set(c1.inputs) & set(c2.inputs))
+
+    # The assumptions: those of c1, relaxed. The guarantees of c2 hold only
+    # where its assumptions do (the contracts are saturated), so they are a
+    # context only when the assumptions of c1 imply those of c2.
+    a1_implies_a2 = not cave.refine(c2.assumptions, c1.assumptions, set(), types)
+    context = list(c2.guarantees) if a1_implies_a2 else []
+    assumptions = cave.relax(c1.assumptions, context, internal | outputs, types)
+
+    # The guarantees: those of c1 refined with the guarantees of c2 as
+    # context, with the assumptions of c2, refined with those of c1.
+    # The quotient is saturated: its guarantees are simplified where its
+    # assumptions hold, which removes the guards left by the context; the
+    # initial and liveness terms also where its invariant holds.
+    refined = cave.refine(c1.guarantees, c2.guarantees, internal, types)
+    refined = cave.refine(refined + list(c2.assumptions), c1.assumptions, internal, types)
+    _, inv, _ = cave.split(refined)
+    inv = cave.simplify([ltl.Unary("G", ltl.conjunction(inv))] if inv else [], assumptions, types)
+    others = [t for t in refined if gr1_kind(t) != "safety"]
+    guarantees: list = []
+    for g in inv + cave.simplify(others, list(assumptions) + inv, types):
+        if g not in guarantees:
+            guarantees.append(g)
+
+    left = sorted(set().union(*map(ltl.variables, assumptions)) & (internal | outputs)
+                  | set().union(*map(ltl.variables, guarantees)) & internal)
+    if left:
+        raise cave.EliminationError(f"cannot eliminate {left} from {c1.name} / {c2.name}")
     keep = {v: t for v, t in types.items() if v not in internal}
     return Contract(name, {v: t for v, t in keep.items() if v not in outputs},
                     {v: t for v, t in keep.items() if v in outputs}, assumptions, guarantees)

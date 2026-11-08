@@ -11,6 +11,11 @@ Added:
   assumptions and by relaxation for the guarantees, term by term over a
   finite window of steps with z3 (Narter, Zhao, Incer, arXiv 2610.37534,
   Algorithms 1 and 2). The result is GR(1) and sound, not always exact.
+- `c1.divide(c2, eliminate=True)`: the quotient of GR(1) contracts with the
+  variables off its interface eliminated (the outputs of both and the inputs
+  of both), following the quotient algorithm of Pacti. The result refines
+  the quotient. `chase_cps.cave.simplify` simplifies its guarantees where
+  its assumptions hold.
 
 ## 0.7.2 (2026-11-02)
 

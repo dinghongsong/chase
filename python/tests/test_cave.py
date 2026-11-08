@@ -176,6 +176,76 @@ def test_aeb_composition():
     assert implied(svd.guarantees, {**svd.variables}, inv="z' <= d & z' >= 0.8 * d - 0.5")
 
 
+def target():
+    # C_T of Section 5: the environment of the supervisor, with d >= d_s + Delta_t eps
+    # and the condition clear -> d >= 20 found by the composition; the safety bound
+    # X v <= (d - d_s) / Delta_t and the progress v >= v_prog when clear
+    # (d_s = 1, Delta_t = 1, eps = 1/2, v_prog = 3/2).
+    return Contract.from_strings(
+        name="CT", inputs={"d": R, "URG": B, "WRN": B}, outputs={"v": R},
+        assumptions=ENVIRONMENT + ["G (d >= 1.5)", "G (!URG & !WRN -> d >= 20)"],
+        guarantees=["G (v' <= d - 1)", "G F (!URG & !WRN & v' >= 1.5)"])
+
+
+# E_{3/2} of Table 2, the invariant of the environment of the quotient
+CLEAR = "!URG & !WRN"
+E = (f"1.5 <= d & d <= 30 & (d <= 10 -> URG & !WRN) & (10 < d & d <= 15 -> WRN & !URG)"
+     f" & (d > 15 -> {CLEAR}) & ({CLEAR} -> d >= 20)")
+
+
+def test_aeb_quotient():
+    # Q = C_T / C_V, Table 2 of the paper: what the supervisor must do.
+    q = target().divide(vehicle(), eliminate=True)
+    assert q.inputs == {"d": R, "URG": B, "WRN": B}
+    assert q.outputs == {"u": R, "MOV": B, "DCL": B, "STP": B}
+    for t in q.assumptions + q.guarantees:
+        assert "v" not in ltl.variables(t)
+    types = {**q.variables}
+    assert same_terms(q.assumptions, terms(f"20 <= d & d <= 30 & {CLEAR}", f"G ({E})",
+                                           f"G F ({CLEAR})"), types)
+    # The guarantees, simplified with the assumptions and the invariant
+    # (u >= 0 turns the u >= -1/2 left by the elimination of v into nothing).
+    assert same_terms(q.guarantees, terms(
+        "2 <= u & u <= 3",
+        "G (0 <= u & u <= 6 & u <= d - 1.5 & (X STP -> u = 0) & (X DCL -> u <= 3)"
+        " & (X MOV -> u >= 2))",
+        f"G F ({CLEAR} & u >= 2)", "G F MOV"), types)
+
+
+@pytest.mark.parametrize("seed", range(RUNS))
+def test_simplification_is_equivalent_in_its_context(seed):
+    # On every lasso of the context, the simplified terms hold iff the terms do.
+    rnd = random.Random(5000 + seed)
+    context, target = _draw(rnd, lambda t, c, g: _sat(t, c))
+    psi = cave.simplify(target, context, TYPES)
+    for trace in _lassos(KEPT + DROPPED):
+        if _sat(trace, context):
+            assert _sat(trace, psi) == _sat(trace, target), (seed, trace)
+
+
+@needs_all
+def test_aeb_quotient_checks():
+    # Section 5: the supervisor refines Q, and the vehicle with Q refines C_T.
+    ct, cv = target(), vehicle()
+    q = ct.divide(cv, eliminate=True)
+    assert refines(supervisor(), q).status == "valid"
+    assert refines(cv.compose(q), ct).status == "valid"
+    assert refines(q, ct.divide(cv)).status == "valid"
+
+
+def test_divide_eliminate_errors():
+    a = Contract.from_strings(name="A", inputs={"x": B}, outputs={"y": B}, guarantees=["G y"])
+    b = Contract.from_strings(name="B", inputs={"y": B}, outputs={"w": B}, guarantees=["G w"])
+    with pytest.raises(ValueError, match="outputs of A and inputs of B"):
+        a.divide(b, eliminate=True)
+    c = Contract.from_strings(name="C", inputs={"x": B}, outputs={"w": B},
+                              guarantees=["G (x U w)"])
+    with pytest.raises(cave.EliminationError, match="not a GR"):
+        c.divide(b, eliminate=True)
+    with pytest.raises(ValueError, match="exclusive"):
+        c.divide(b, eliminate=True, discharge=True)
+
+
 def test_compose_eliminate_errors():
     a = Contract.from_strings(name="A", inputs={"x": B}, outputs={"y": B},
                               guarantees=["G (x U y)"])
@@ -278,3 +348,46 @@ def test_composition_abstracts_the_closed_form(seed):
                                assumptions=[ltl.to_str(t) for t in _formula(rnd, ["m"])],
                                guarantees=[ltl.to_str(t) for t in _formula(rnd, ["m", "b"])])
     assert refines(c1.compose(c2), c1.compose(c2, eliminate=True)).status == "valid"
+
+
+def _divide_draw(rnd):
+    """C1 (input q, output p) and C2 (input s, output p): the quotient has the
+    input q and the output s, and p is eliminated."""
+    c1 = Contract.from_strings(name="C1", inputs={"q": B}, outputs={"p": B},
+                               assumptions=[ltl.to_str(t) for t in _formula(rnd, ["q"])],
+                               guarantees=[ltl.to_str(t) for t in _formula(rnd, ["q", "p"])])
+    c2 = Contract.from_strings(name="C2", inputs={"s": B}, outputs={"p": B},
+                               assumptions=[ltl.to_str(t) for t in _formula(rnd, ["s"])],
+                               guarantees=[ltl.to_str(t) for t in _formula(rnd, ["s", "p"])])
+    return c1, c2
+
+
+@pytest.mark.parametrize("seed", range(RUNS))
+def test_quotient_is_sound(seed):
+    # Q refines C1 / C2 = (A1 & G2, A2 & G1) with the contracts saturated, on every
+    # lasso of up to three states: A1 & (A2 -> G2) -> AQ, and where these hold,
+    # AQ -> GQ gives A2 and A1 -> G1.
+    rnd = random.Random(3000 + seed)
+    while True:
+        c1, c2 = _divide_draw(rnd)
+        ts = c1.assumptions + c1.guarantees + c2.assumptions + c2.guarantees
+        if any(_sat(t, ts) for t in _lassos(KEPT + DROPPED)):
+            break
+    q = c1.divide(c2, eliminate=True)
+    assert q.inputs == {"q": B} and q.outputs == {"s": B}
+    for t in q.assumptions + q.guarantees:
+        assert "p" not in ltl.variables(t)
+    a1, g1, a2, g2 = c1.assumptions, c1.guarantees, c2.assumptions, c2.guarantees
+    for trace in _lassos(KEPT + DROPPED):
+        if _sat(trace, a1) and (not _sat(trace, a2) or _sat(trace, g2)):
+            assert _sat(trace, q.assumptions), (seed, trace)
+            if _sat(trace, q.guarantees):
+                assert _sat(trace, a2) and _sat(trace, g1), (seed, trace)
+
+
+@needs_all
+@pytest.mark.parametrize("seed", range(RUNS))
+def test_quotient_refines_the_closed_form(seed):
+    # The quotient with eliminated variables refines the closed form.
+    c1, c2 = _divide_draw(random.Random(4000 + seed))
+    assert refines(c1.divide(c2, eliminate=True), c1.divide(c2)).status == "valid"

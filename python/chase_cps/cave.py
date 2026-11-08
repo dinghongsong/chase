@@ -430,6 +430,71 @@ def relax(target: list[ltl.Node], context: list[ltl.Node], drop, types: dict) ->
     return _lift(init, inv, [("GF", p) for p in _strongest(projections)])
 
 
+# Simplification in a context ------------------------------------------------------
+
+def simplify(terms: list[ltl.Node], context: list[ltl.Node], types: dict) -> list[ltl.Node]:
+    """The GR(1) terms, each equivalent to the one given wherever the
+    context holds: the parts of a core that the context makes true or false
+    at the steps where the core is read are replaced by true or false (the
+    initial term with the initial terms of the context, every core with the
+    shifted invariant of the context). The terms that become true are
+    dropped. On every trace of the context, the result holds iff the terms
+    do, so the guarantees of a saturated contract may be simplified with its
+    assumptions."""
+    g_init, g_inv, _ = split(context)
+    out = []
+    for t in terms:
+        kind = gr1_kind(t)
+        w = _Window(types)
+        if kind == "init" or (kind is None and bounded(t)):
+            core, wrap = t, None
+            h = max([depth(c) for c in g_init + [core]])
+            ctx = z3.And(w.core(ltl.conjunction(g_init)), w.shifted(g_inv, h))
+        elif kind == "safety":
+            core, wrap = t.arg, "G"
+            ctx = w.shifted(g_inv, depth(core))
+        elif kind == "justice":
+            core, wrap = t.arg.arg, "GF"
+            ctx = w.shifted(g_inv, depth(core))
+        else:
+            raise EliminationError(f"{ltl.to_str(t)} is not a GR(1) term")
+        f = w.core(core)
+        g = _under(ctx, f)
+        s = _simplified(g)
+        if _valid(z3.Implies(ctx, s == f)):
+            g = s
+        if z3.is_true(g):
+            continue
+        if g.eq(f):
+            out.append(t)
+            continue
+        c = to_ltl(g)
+        out.append(c if wrap is None else ltl.Unary("G", c) if wrap == "G"
+                   else ltl.Unary("G", ltl.Unary("F", c)))
+    return out
+
+
+def _under(ctx, f):
+    """f with its Boolean parts that ctx makes true or false replaced by true
+    or false, so that ctx -> (f <-> result)."""
+    if _valid(z3.Implies(ctx, f)):
+        return z3.BoolVal(True)
+    if _valid(z3.Implies(ctx, z3.Not(f))):
+        return z3.BoolVal(False)
+    if z3.is_and(f) or z3.is_or(f):
+        unit = z3.is_and(f)
+        parts = [_under(ctx, c) for c in f.children()]
+        parts = [c for c in parts if not (z3.is_true(c) if unit else z3.is_false(c))]
+        if not parts:
+            return z3.BoolVal(unit)
+        g = parts[0] if len(parts) == 1 else (z3.And if unit else z3.Or)(*parts)
+        return f if g.eq(f) else g
+    if z3.is_not(f):
+        g = _under(ctx, f.children()[0])
+        return f if g.eq(f.children()[0]) else z3.Not(g)
+    return f
+
+
 def _strongest(cores: list) -> list:
     """The cores without the equivalent copies and those strictly implied by
     another: G F a implies G F b when a implies b."""

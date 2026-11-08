@@ -351,6 +351,27 @@ print(system)    # assumes true, guarantees G (req -> X ack) and G F ack
 `chase_cps.cave.relax(target, context, drop, types)` are the two
 eliminations on lists of terms.
 
+`c1.divide(c2, eliminate=True)` is the quotient with the variables off its
+interface eliminated: the outputs of both and the inputs of both (Incer et
+al., Pacti, ACM TCPS 9(1), 2025). The assumptions of c1 are relaxed, with the
+guarantees of c2 as context when the assumptions of c1 imply those of c2;
+the guarantees of c1 are refined with the guarantees of c2 as context, the
+assumptions of c2 are added, and the whole is refined with the assumptions
+of c1 as context. The guarantees are then simplified where the assumptions
+of the result hold (`chase_cps.cave.simplify`): the contract is saturated, so
+this does not change it. The terms must be GR(1), as for composition. The
+result refines the quotient: c2 composed with any refinement of it refines c1.
+
+```python
+from chase_cps import Contract
+system = Contract.from_strings(name="Sys", inputs={"req": "bool"}, outputs={"ack": "bool"},
+                               guarantees=["G (req -> X ack)", "G F ack"])
+use = Contract.from_strings(name="Use", inputs={"m": "bool"}, outputs={"ack": "bool"},
+                            guarantees=["G (m -> ack)"])
+gen = system.divide(use, eliminate=True)    # ack is gone, m is the output
+print(gen)    # assumes true, guarantees G (!req | X m) and G F m
+```
+
 `c1.merge(c2, discharge=True)`, `c1.divide(c2, discharge=True)`, and
 `c1.conjoin(c2, discharge=True)` keep the terms too, and the result is the
 same contract as the closed form: only composition gives an abstraction.
