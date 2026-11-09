@@ -11,6 +11,8 @@ Added:
   assumptions and by relaxation for the guarantees, term by term over a
   finite window of steps with z3 (Narter, Zhao, Incer, arXiv 2610.37534,
   Algorithms 1 and 2). The result is GR(1) and sound, not always exact.
+  Its guarantees are simplified where its assumptions hold
+  (`chase_cps.cave.simplify`), which does not change the contract.
 
 ## 0.7.2 (2026-11-02)
 

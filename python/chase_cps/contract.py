@@ -510,7 +510,10 @@ class Contract:
         assumptions of the receiving contract are refined with the
         assumptions and guarantees of the driving one as context, and the
         guarantees relaxed, by the GR(1) variable elimination of
-        ``chase_cps.cave`` (Narter, Zhao, Incer, arXiv 2610.37534). All the
+        ``chase_cps.cave`` (Narter, Zhao, Incer, arXiv 2610.37534); the
+        guarantees are then simplified where the assumptions of the result
+        hold (``chase_cps.cave.simplify``), which does not change the
+        contract. All the
         terms must be GR(1), over Booleans, reals, and integer ranges, and
         the contracts must not feed each other. The result is an abstraction
         of the composition: the closed form refines it.
@@ -692,11 +695,15 @@ def _compose_eliminating(c1: Contract, c2: Contract, name: str) -> Contract:
     else:
         assumptions = list(c1.assumptions) + list(c2.assumptions)
 
-    # The guarantees: those of each contract relaxed with the other's as context.
+    # The guarantees: those of each contract relaxed with the other's as
+    # context, then simplified where the assumptions hold, which does not
+    # change the contract.
+    relaxed = [g for g in (cave.relax(c1.guarantees, c2.guarantees, internal, types)
+                           + cave.relax(c2.guarantees, c1.guarantees, internal, types))
+               if not ltl.variables(g) & internal]
     guarantees: list = []
-    for g in (cave.relax(c1.guarantees, c2.guarantees, internal, types)
-              + cave.relax(c2.guarantees, c1.guarantees, internal, types)):
-        if g not in guarantees and not ltl.variables(g) & internal:
+    for g in cave.simplify(relaxed, assumptions, types):
+        if g not in guarantees:
             guarantees.append(g)
 
     keep = {v: t for v, t in types.items() if v not in internal}

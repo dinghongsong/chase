@@ -266,6 +266,17 @@ def test_relaxation_is_sound(seed):
             assert _sat(trace, psi), (seed, trace)
 
 
+@pytest.mark.parametrize("seed", range(RUNS))
+def test_simplification_is_equivalent_in_its_context(seed):
+    # On every lasso of the context, the simplified terms hold iff the terms do.
+    rnd = random.Random(5000 + seed)
+    context, target = _draw(rnd, lambda t, c, g: _sat(t, c))
+    psi = cave.simplify(target, context, TYPES)
+    for trace in _lassos(KEPT + DROPPED):
+        if _sat(trace, context):
+            assert _sat(trace, psi) == _sat(trace, target), (seed, trace)
+
+
 @needs_all
 @pytest.mark.parametrize("seed", range(RUNS))
 def test_composition_abstracts_the_closed_form(seed):

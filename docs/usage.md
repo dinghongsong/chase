@@ -329,7 +329,9 @@ are refined with the assumptions and guarantees of the driving one as
 context (a formula without the connecting variables that, with the context,
 implies them), and the guarantees of each contract are relaxed with those of
 the other as context (a formula without the connecting variables that they
-imply). For GR(1) terms, `chase_cps.cave` computes these two eliminations
+imply), then simplified where the assumptions of the result hold
+(`chase_cps.cave.simplify`), which does not change the contract. For GR(1)
+terms, `chase_cps.cave` computes these two eliminations
 term by term over a finite window of steps with z3 (Narter, Zhao, Incer,
 arXiv 2610.37534, Algorithms 1 and 2): the result is GR(1) and sound, not
 always exact. It needs z3; the terms must be GR(1) (initial terms may read
@@ -349,7 +351,9 @@ print(system)    # assumes true, guarantees G (req -> X ack) and G F ack
 
 `chase_cps.cave.refine(target, context, drop, types)` and
 `chase_cps.cave.relax(target, context, drop, types)` are the two
-eliminations on lists of terms.
+eliminations on lists of terms, and `chase_cps.cave.simplify(terms, context,
+types)` replaces the parts of the terms that the context makes true or false:
+wherever the context holds, the result holds iff the terms do.
 
 `c1.merge(c2, discharge=True)`, `c1.divide(c2, discharge=True)`, and
 `c1.conjoin(c2, discharge=True)` keep the terms too, and the result is the
